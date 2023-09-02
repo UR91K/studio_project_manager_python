@@ -29,15 +29,11 @@ Note:
 
 import os
 import sqlite3
-import sys
 from pathlib import Path
-
-import toml
 from fuzzywuzzy import fuzz
-from PyQt5.QtCore import QTimer
+import toml
 from PyQt5.QtWidgets import (
     QApplication,
-    QComboBox,
     QLineEdit,
     QMainWindow,
     QTableWidget,
@@ -51,129 +47,97 @@ config = toml.load("config.toml")
 user_home_dir = os.path.expanduser("~")
 DATABASE_PATH = Path(config["database_path"]["path"].replace("{USER_HOME}", user_home_dir))
 print("Database path: ", DATABASE_PATH)
+
 conn = sqlite3.connect(DATABASE_PATH)
 cursor = conn.cursor()
 cursor.execute("PRAGMA table_info(ableton_live_sets)")
 columns_info = cursor.fetchall()
-columns_info_dict = {info[1]: index for index, info in enumerate(columns_info)}
+conn.close()
 
-excluded_columns = ["uuid", 
-                    "identifier", 
-                    "xml_root", 
-                    "path", 
-                    "file_hash", 
-                    "last_scan_timestamp", 
-                    "major_version", 
-                    "minor_version", 
-                    "creator"
-                    "furthest_bar"
-                    ]
+def get_best_match_score(row, query, exclude_columns):
+    best_score = 0
+    for index, column_info in enumerate(columns_info):
+        column_name = column_info[1]
+        if column_name not in exclude_columns and row[index] is not None:
+            score = fuzz.ratio(str(row[index]).lower(), query.lower())
+            best_score = max(best_score, score)
+    return best_score
 
-HEADER_MAPPING = {
-    'name': 'Name',
-    'creation_time': 'Creation Time',
-    'last_modification_time': 'Last Modified',
-    'key': 'Key',
-    'major_minor_patch': 'Version',
-    'tempo': 'Tempo',
-    'time_signature': 'Time Signature',
-    'estimated_duration': 'Estimated Duration',
-    'furthest_bar': 'Furthest Bar',
-    'plugins': 'Plugins',
-    'samples': 'Samples'
-}
+def perform_fuzzy_search(query):
+    exclude_columns = ["uuid", "identifier", "xml_root", "path", "file_hash", "last_scan_timestamp"]
+    
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM ableton_live_sets")
+    all_rows = cursor.fetchall()
 
-class MainWindow(QMainWindow):
+    match_scores = [(row, get_best_match_score(row, query, exclude_columns)) for row in all_rows]
+
+    sorted_matches = sorted(match_scores, key=lambda x: x[1], reverse=True)
+
+    top_matches = sorted_matches[:10]
+
+    conn.close()
+
+    return top_matches
+
+class SearchApp(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.init_ui()
+        self.setWindowTitle("SQLite Search GUI")
+        
+        self.headers = [info[1] for info in columns_info if info[1] not in ["uuid", 
+                                                                            "identifier", 
+                                                                            "xml_root", "path", 
+                                                                            "file_hash", 
+                                                                            "last_scan_timestamp"]]
 
-    def init_ui(self):
+        self.search_line_edit = QLineEdit(self)
+        self.result_table = QTableWidget(self)
+        self.result_table.setColumnCount(len(columns_info) - len(["uuid", 
+                                                                  "identifier", 
+                                                                  "xml_root", 
+                                                                  "path", 
+                                                                  "file_hash", 
+                                                                  "last_scan_timestamp"]))
+        self.result_table.setHorizontalHeaderLabels(self.headers)
+
         layout = QVBoxLayout()
+        layout.addWidget(self.search_line_edit)
+        layout.addWidget(self.result_table)
 
-        self.search_bar = QLineEdit(self)
-        self.search_bar.textChanged.connect(self.on_search_change)
-        layout.addWidget(self.search_bar)
-
-        self.results_table = QTableWidget(self)
-        self.headers = [HEADER_MAPPING.get(info[1], info[1]) for info in columns_info if info[1] not in excluded_columns]
-        self.results_table.setHorizontalHeaderLabels(self.headers)
-        layout.addWidget(self.results_table)
-
-        central_widget = QWidget()
+        central_widget = QWidget(self)
         central_widget.setLayout(layout)
         self.setCentralWidget(central_widget)
 
-        self.debounce_timer = QTimer(self)
-        self.debounce_timer.setSingleShot(True)
-        self.debounce_timer.timeout.connect(self.search_database)
+        self.search_line_edit.textChanged.connect(self.perform_search)
 
-        self.headers = [info[1] for info in columns_info if info[1] not in excluded_columns]
-        self.friendly_headers = [HEADER_MAPPING.get(header, header) for header in self.headers]
-        self.friendly_headers.extend(['Plugins', 'Samples'])
-        self.results_table.setHorizontalHeaderLabels(self.friendly_headers)
-
-    def on_search_change(self):
-        self.debounce_timer.stop()
-        self.debounce_timer.start(300)
-
-    def search_database(self):
-        query = self.search_bar.text()
+    def perform_search(self):
+        query = self.search_line_edit.text()
+        
         if not query:
-            self.results_table.clear()
+            self.result_table.setRowCount(0)
             return
+        
+        matches = perform_fuzzy_search(query)
+        
+        self.result_table.setRowCount(len(matches))
+        for row, (match_row, score) in enumerate(matches):
+            for col_index, value in enumerate(match_row):
+                column_name = columns_info[col_index][1]
+                if column_name not in ["uuid", 
+                                       "identifier", 
+                                       "xml_root", 
+                                       "path", 
+                                       "file_hash", 
+                                       "last_scan_timestamp"
+                                       ]:
+                    self.result_table.setItem(row, self.headers.index(column_name), QTableWidgetItem(str(value)))
 
-        cursor.execute("SELECT * FROM ableton_live_sets")
-        rows = cursor.fetchall()
-
-        matching_rows = []
-        for row in rows:
-            for col in row:
-                if isinstance(col, str):
-                    score = fuzz.ratio(query, col)
-                    if score > 80:
-                        matching_rows.append(row)
-                        break
-
-        self.results_table.setRowCount(len(matching_rows))
-        self.results_table.setColumnCount(len(self.headers))
-        for row_idx, row in enumerate(matching_rows):
-            for col_idx, col in enumerate(row):
-                col_name = columns_info[col_idx][1]
-                if col_name not in excluded_columns:
-                    self.results_table.setItem(row_idx, self.headers.index(col_name), QTableWidgetItem(str(col)))
-
-            ableton_set_id = row[columns_info_dict["identifier"]]
-
-            cursor.execute("""
-                SELECT name FROM plugins
-                JOIN ableton_live_set_plugins ON plugins.id = ableton_live_set_plugins.plugin_id
-                WHERE ableton_live_set_plugins.ableton_live_set_id = ?
-            """, (ableton_set_id,))
-            plugins = cursor.fetchall()
-            
-            plugins_combo = QComboBox()
-            for plugin in plugins:
-                plugins_combo.addItem(plugin[0])
-            self.results_table.setCellWidget(row_idx, self.friendly_headers.index('Plugins'), plugins_combo)
-
-            cursor.execute("""
-                SELECT name FROM samples
-                JOIN ableton_live_set_samples ON samples.id = ableton_live_set_samples.sample_id
-                WHERE ableton_live_set_samples.ableton_live_set_id = ?
-            """, (ableton_set_id,))
-            samples = cursor.fetchall()
-
-            samples_combo = QComboBox()
-            for sample in samples:
-                samples_combo.addItem(sample[0])
-            self.results_table.setCellWidget(row_idx, self.friendly_headers.index('Samples'), samples_combo)
-
-        self.results_table.setHorizontalHeaderLabels(self.friendly_headers)
-
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    main_window = MainWindow()
-    main_window.show()
-    sys.exit(app.exec_())
+if __name__ == "__main__":
+    app = QApplication([])
+    window = SearchApp()
+    window.show()
+    app.exec_()
