@@ -573,33 +573,35 @@ class AbletonLiveSet(Base):
         Returns:
         The ElementTree root element if the file is valid, otherwise None.
         """
-        if not pathlib.Path(self.path).exists():
-            log.error(f"{self.name} ({str(self.uuid)[:5]}): {pathlib.Path(self.path)} does not exist")
+        path = pathlib.Path(self.path)
+        if not path.exists() or not path.is_file() or path.suffix != ".als":
+            log_msg = f"{self.name} ({str(self.uuid)[:5]}): {path} "
+            if not path.exists():
+                log_msg += "does not exist"
+            elif not path.is_file():
+                log_msg += "is not a file"
+            else:
+                log_msg += "is not a valid Ableton Live Set file"
+            log.error(log_msg)
             self._xml_root = None
             return self._xml_root
-        if not pathlib.Path(self.path).is_file():
-            log.error(f"{self.name} ({str(self.uuid)[:5]}): {pathlib.Path(self.path)} is not a file")
-            self._xml_root = None
-            return self._xml_root
-        if pathlib.Path(self.path).suffix != ".als":
-            log.error(
-                f"{self.name} ({str(self.uuid)[:5]}): {pathlib.Path(self.path)} is not a valid Ableton Live Set file"
-            )
-            self._xml_root = None
-            return self._xml_root
+        
         if self.last_modification_time is None or self.creation_time is None:
             log.warning(f"{self.name} ({str(self.uuid)[:5]}): ")
             self.update_file_times()
-        with gzip.open(pathlib.Path(pathlib.Path(self.path)), "rb") as fd:
+            
+        with gzip.open(path, "rb") as fd:
             data = fd.read()
             try:
                 root = ElementTree.fromstring(data)
             except ElementTree.ParseError as e:
-                log.error(f"{self.name} ({str(self.uuid)[:5]}): {pathlib.Path(self.path)} is not a valid XML file: {e}")
+                log.error(f"{self.name} ({str(self.uuid)[:5]}): {path} is not a valid XML file: {e}")
                 self._xml_root = None
                 return self._xml_root
+        
         self._xml_root = root
         return self._xml_root
+
 
 
     def update_furthest_bar(self) -> float:
@@ -724,7 +726,7 @@ class AbletonLiveSet(Base):
                     if str(path) not in existing_samples:
                         log.info(f"{self.name} ({str(self.uuid)[:5]}): Adding new sample {sample_name}")
                         sample = Sample(path=str(path), name=sample_name, is_present=True)
-                        session.add(sample)
+                        session.add(sample) 
                         existing_samples[str(path)] = sample
                     else:
                         log.info(f"{self.name} ({str(self.uuid)[:5]}): Sample {sample_name} already exists, skipping")

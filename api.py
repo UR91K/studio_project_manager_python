@@ -1,11 +1,13 @@
 from flask import Flask, jsonify, make_response
 from contextlib import closing
+from flask_cors import CORS   # <-- Import the CORS module
 import sqlite3
 from database_config import DATABASE_PATH
 from logging_utility import log
 
 
 app = Flask(__name__)
+CORS(app)
 
 @app.route('/api/ableton_live_sets', methods=['GET'])
 def get_ableton_live_sets():
@@ -57,7 +59,7 @@ def get_ableton_live_sets():
 
                 cursor.execute("SELECT samples.id, samples.name FROM samples "
                             "INNER JOIN ableton_live_set_samples ON samples.id = ableton_live_set_samples.sample_id "
-                            "WHERE ableton_live_set_samples.ableton_live_set_id = ?", (live_set[1],))
+                            "WHERE ableton_live_set_samples.ableton_live_set_id = ?", (live_set[0],))
                 samples = cursor.fetchall()
 
                 log.info(f"samples found: {samples}")
@@ -74,10 +76,9 @@ def get_ableton_live_sets():
             return make_response(jsonify({'ableton_live_sets': output}), 200)
         
     except sqlite3.Error as e:
-        # Log error and return an error code
         log.error(f"Database error: {e}")
         return make_response(jsonify({'error': 'Database error'}), 500)
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(host='0.0.0.0', debug=True, port=5000)
